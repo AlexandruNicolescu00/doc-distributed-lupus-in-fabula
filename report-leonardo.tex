@@ -9,21 +9,20 @@
 \newcommand{\emailaddr}[1]{\href{mailto:#1}{\texttt{#1}}}
 
 \title{\LARGE
-    Final Report Template\\
-    (replace with your project name)
+    Distributed Lupus in Fabula
 }
-\subtitle{Final Report for the Distributed Systems Course [Your academic year here]}
+\subtitle{Final Report for the Distributed Systems Course 2025/2026}
 
 % Consider watching:
 % https://www.youtube.com/watch?v=ihxSUsJB_14
 % https://www.youtube.com/watch?v=XTFWaV55uDo
 
 \author{
-    Author 1 \\ \emailaddr{author1@email.it}
+    Jacopo Bonifazi \\ \emailaddr{author1@email.it}
     \and
-    Author 2 \\ \emailaddr{author2@gmail.com}
+    Alexandru Nicolescu \\ \emailaddr{author2@gmail.com}
     \and
-    Author 3 \\ \emailaddr{author3@unibo.it}
+    Leonardo Vorabbi \\ \emailaddr{leonardo.vorabbi@studio.unibo.it}
 }
 
 \date{\today}
@@ -33,95 +32,99 @@
 \maketitle
 
 \begin{abstract}
-    Up to $\sim$2000 characters briefly describing the project.
+  Distributed Lupus in Fabula is a real-time multiplayer web application that brings the classic social deduction game Lupus in Fabula online, allowing groups of players to create or join a game lobby from any browser and play a full match together over the internet.
+  The system is composed of a Vue 3 single-page frontend and a FastAPI/Socket.IO backend, communicating via REST for stateless operations and via WebSocket for real-time, low-latency interactions such as votes, phase transitions, and private role actions. Game and lobby state is kept in Redis rather than a traditional database, acting both as a shared source of truth across backend replicas and as a Pub/Sub broker that lets events generated on one instance reach clients connected to any other instance.
+  This design allows the backend to run as multiple concurrent, interchangeable replicas behind a reverse proxy, supporting many simultaneous matches while keeping every player's view of the game synchronized in real time.
 \end{abstract}
 
-\section*{Disclaimer (if needed)}
+\section*{Disclaimer}
 
-During the preparation of this work, the author(s) used [NAME TOOL / SERVICE] to [REASON].
+During the preparation of this work, the authors used LLMs to to refine syntax and correct linguistic errors.
 
-After using this tool/service, 
-the author(s) reviewed and edited the content as needed 
-and take(s) full responsibility for the content of the final report/artifact.
+After using this tool, 
+the authors reviewed and edited the content as needed 
+and take full responsibility for the content of the final report/artifact
 
-\section*{Quick \LaTeX{} suggestions}
+\section{Concept}\label{Concept}
 
-If you need to cite a reference, you can use the \texttt{cite} command, 
-like providing the BibTex key of some entry in the \texttt{references.bib} file, 
-e.g.: \cite{adams1995hitchhiker}.
+\subsection{Type of Product}
 
-You can find pre-coocked BibTex entries for most Computer Science papers on \href{https://dblp.uni-trier.de/}{DBLP}.
-
-If you need to include an image,
-let \LaTeX{} decide where to put it by using the \texttt{figure} environment,
-with a \texttt{includegraphics} command inside it.
-%
-If your need to reference a figure,
-use the \texttt{label} command to assign a label to the figure,
-and then use the \texttt{cref} command to reference it.
-%
-Put figures in the \texttt{figures} folder.
-%
-A complete example is shown in \cref{fig:universe}.
-
-\begin{figure}
-    \centering
-    \includegraphics[width=0.5\textwidth]{figures/universe.jpg}
-    \caption{This is an example image}
-    \label{fig:universe}
-\end{figure}
-
-Do \textbf{not} put any placement constraint on figures,
-such as \texttt{[h]} or \texttt{[h!]}.
-%
-Same considerations apply for other floating elements 
-(e.g. tables, algorithms, listings, etc.).
-
-Do \textbf{not} use the \texttt{\textbackslash\textbackslash} or \texttt{\textbackslash newline} commands to break lines.
-
-Just leave an empty line between two paragraphs to start a new one.
-%
-The new line will be automatically indented.
-%
-This is intended: it is the \LaTeX{} way to separate capoverses.
-
-\section{Concept}\label{concept}
-
-Here you should explain:
+The project is a web application, specifically a real-time multiplayer game inspired by the traditional social deduction game \textit{Lupus in Fabula}. It is a full-stack distributed system composed of:
 
 \begin{itemize}
-  \item The type of product developed with that project, for example (non-exhaustive):
-  %
-  \begin{itemize}
-    \item Application (with GUI, be it mobile, web, or desktop)
-    \item Command-line application (CLI could be used by humans or scripts)
-    \item Library
-    \item Web-service(s)
-  \end{itemize}
-
-  \item Use case description:
-  %
-  \begin{itemize}
-    \item \emph{what} is the software doing?
-    \item \emph{where} are the users?
-    \item \emph{when} and \emph{how frequently} do they interact with the system?
-    \item \emph{how} do they \emph{interact} with the system? which \emph{devices} are they using?
-    \item does the system need to \emph{store} user's \textbf{data}? \emph{which}? \emph{where}?
-    \item most likely, there will be \emph{multiple} \textbf{roles}
-  \end{itemize}
-
-  \item Why is distribution needed?
-  %
-  \begin{itemize}
-    \item geographically distributed environments?
-    \item computation speedup?
-    \item resource sharing?
-    \item fault tolerance?
-    \item other reasons?
-  \end{itemize}
-  %
-  In any case, please elaborate.
+    \item A \textbf{frontend}: a Vue 3 Single Page Application (SPA), accessible via browser.
+    \item A \textbf{backend}: a set of stateless, horizontally replicated web services built with FastAPI and Socket.IO, responsible for game logic, session management, and real-time event propagation.
+    \item A \textbf{shared data layer}: Redis, used both as a low-latency state store and as a Pub/Sub message broker connecting the backend replicas.
 \end{itemize}
+
+The whole system is designed to be deployed as a multi-container distributed application, rather than as a single monolithic server.
+
+\subsection{Use Case Description}
+
+\paragraph{What the software does.}
+The application lets a group of players create or join a virtual ``lobby,'' wait until everyone is ready, and then play a phase-based game of hidden roles and social deduction. Once a match starts, the game state moves automatically through a fixed sequence of phases:
+
+\[
+\textbf{LOBBY} \rightarrow \textbf{DAY} \rightarrow \textbf{VOTING} \rightarrow \textbf{NIGHT} \rightarrow \cdots \rightarrow \textbf{ENDED}
+\]
+driven by server-side timers.
+
+During DAY/VOTING, players discuss and vote to eliminate a suspect; during NIGHT, players with special roles perform hidden actions that are resolved by the server before the next day begins. The match ends automatically once a win condition is met.
+
+\paragraph{Where the users are.}
+Players are geographically dispersed (or at least not necessarily co-located): each player connects independently from their own browser, over the public Internet, to a shared game session identified by a room/lobby code.
+
+\paragraph{When and how frequently they interact.}
+Interaction is continuous and real-time for the whole duration of a match (several minutes to tens of minutes), not just at fixed request/response intervals. Players must react within phase time limits (e.g., voting windows, night-action windows), so the system needs low-latency, event-driven communication rather than simple periodic polling.
+
+\paragraph{How they interact.}
+All interaction happens through a web browser via the Vue SPA. The frontend communicates with the backend in two complementary ways:
+
+\begin{itemize}
+    \item \textbf{REST} calls for stateless operations such as creating a lobby, joining a lobby, or fetching the current game state.
+    \item \textbf{WebSocket} for real-time, bidirectional events: votes, phase changes, chat, private role actions, disconnect/reconnect notifications, etc.
+\end{itemize}
+
+\paragraph{Does the system store user data? Which, and where?}
+The system does not use a persistent relational database for user accounts since there is no long-term profile storage. Instead, it relies on Redis as a shared, TTL-based store for all session-scoped game data:
+
+\begin{itemize}
+    \item room/lobby state and configuration;
+    \item the list of connected players and their ready status;
+    \item assigned roles (Wolf, Seer, Villager);
+    \item votes cast during the DAY/VOTING phase and private night actions;
+    \item phase timers and current phase;
+    \item host identity.
+\end{itemize}
+
+On the client side, the browser itself retains a minimal amount of session data in local storage, purely to support reconnection and continuity of a player's session across page reloads or brief disconnects.
+
+\paragraph{Roles.}
+The system distinguishes several actor roles at different levels:
+
+\begin{itemize}
+    \item \emph{Application-level roles}: \textbf{Villager}, \textbf{Wolf}, \textbf{Seer}, each with different permitted actions and visibility (e.g., Wolves share a private night chat, the Seer can inspect one player per night).
+    \item \emph{Session-level roles}: the \textbf{Host}, who configures the match, can remove players from the lobby, and starts the game; versus \textbf{regular players}, who can only join, ready up, vote, and act according to their assigned role.
+    \item \emph{System role}: the backend itself acts as an autonomous \textbf{orchestrator}. It owns the authoritative game state, advances phases via timers, resolves votes and night actions, and enforces which actions are legal at any given moment.
+\end{itemize}
+
+\subsection{Why Distribution Is Needed}
+
+Distribution in this project is not motivated by geographic proximity to users, but primarily by scalability, real-time synchronization, and fault tolerance:
+
+\begin{itemize}
+    \item \textbf{Horizontal scalability / resource sharing.} The backend is designed to run as multiple stateless replicas behind a reverse proxy, so that many concurrent lobbies and matches can be served in parallel without a single process becoming a bottleneck. Because game state lives in Redis rather than in each process's memory, any replica can handle requests for any room, allowing the system to scale out simply by adding more backend instances.
+
+    \item \textbf{Shared state across replicas.} Since each backend instance is stateless with respect to game data, Redis acts as the single source of truth for lobby/game state. This is what makes horizontal scaling actually work: a player's WebSocket connection can be handled by one replica while another replica processes a REST call for the same match, and both see a consistent view of the state.
+
+    \item \textbf{Cross-replica real-time propagation.} Because clients belonging to the same room can be connected to different backend replicas, a simple in-process event emitter is not sufficient. The system uses Redis Pub/Sub to broadcast game events (vote updates, phase transitions, chat messages, etc.) across all replicas, ensuring that every client in a room receives updates regardless of which instance generated them or which instance is handling their socket.
+
+    \item \textbf{Fault tolerance and continuity.} The backend includes explicit mechanisms for reconnecting to Redis, retrying failed operations, sweeping/recovering timers, and reconciling state after temporary inconsistencies (anti-entropy). This matters because a real-time game cannot simply crash or stall if a single backend replica fails, a Redis connection drops momentarily, or a player's browser disconnects and reconnects mid-match. The match state and timers must survive these events.
+
+    \item \textbf{Reduced dependency on a single instance.} Because the game state is decoupled from any specific process, a backend replica can be restarted, replaced, or scaled down/up without necessarily terminating ongoing matches, and a reconnecting player can resume their session against a different replica than the one they were originally connected to.
+\end{itemize}
+
+In summary, this system is distributed primarily to support many concurrent matches, keep real-time state synchronized across independent backend replicas, and remain resilient to instance failures and client disconnections.
 
 \section{Requirements Elicitation and Analysis}\label{requirements}
 

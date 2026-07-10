@@ -99,6 +99,13 @@ The system does not use a persistent relational database for user accounts since
 
 On the client side, the browser itself retains a minimal amount of session data in local storage, purely to support reconnection and continuity of a player's session across page reloads or brief disconnects.
 
+\begin{figure}
+    \centering
+    \includegraphics[width=0.40\textwidth]{figures/system_architecture_overview.png}
+    \caption{High-level architecture: clients connect through a reverse proxy to stateless backend replicas, which share game state and propagate events through Redis.}
+    \label{fig:architecture}
+\end{figure}
+
 \paragraph{Roles.}
 The system distinguishes several actor roles at different levels:
 
@@ -128,104 +135,103 @@ In summary, this system is distributed primarily to support many concurrent matc
 
 \section{Requirements Elicitation and Analysis}\label{requirements}
 
+This section specifies \emph{what} the system must do, independently of the specific implementation strategies later adopted. Requirements are grouped into functional, non-functional, and implementation requirements, each with a unique identifier and an associated acceptance criterion to be used during validation.
+
+\subsection{Functional Requirements}
+
+\begin{description}
+    \item[FR1 -- Lobby creation.] The system shall allow a user to create a new game lobby by providing a valid nickname.\\
+    \textit{Acceptance criterion:} given a valid nickname, the system creates a room, assigns it a lobby code, and redirects the user to the lobby screen.
+
+    \item[FR2 -- Joining an existing lobby.] The system shall allow a user to join an existing lobby using a room code and a nickname.\\
+    \textit{Acceptance criterion:} with a valid room code, the player enters the lobby and appears in the participant list; with an invalid code, the system displays an error.
+
+    \item[FR3 -- Browsing open lobbies.] The system shall display to the user the list of currently available lobbies.\\
+    \textit{Acceptance criterion:} the home screen shows only lobbies that are still joinable, periodically refreshed from the backend.
+
+    \item[FR4 -- Host management.] The system shall designate a host for each lobby and restrict room-control operations to that host.\\
+    \textit{Acceptance criterion:} only the host can modify lobby settings, remove a player, and start the match.
+
+    \item[FR5 -- Ready status.] The system shall allow players to declare themselves ready or not ready within the lobby.\\
+    \textit{Acceptance criterion:} each player's ready status is updated accordingly, and the match can only start once the minimum required conditions are met.
+
+    \item[FR6 -- Match start and role assignment.] The system shall start a match when requested by the host and assign a role to each participant.\\
+    \textit{Acceptance criterion:} at match start, every player receives a role and the match enters the expected phase sequence.
+
+    \item[FR7 -- Game phase management.] The system shall support the phases LOBBY, DAY, VOTING, NIGHT, and ENDED.\\
+    \textit{Acceptance criterion:} the system displays the current phase and automatically transitions to the next phase according to the game rules.
+
+    \item[FR8 -- Voting and special actions.] The system shall allow players to vote during the day and allow special roles to perform night actions.\\
+    \textit{Acceptance criterion:} votes and actions are accepted only during the correct phase and produce an update visible to the other clients.
+
+    \item[FR9 -- In-game chat.] The system shall allow participants in a room to exchange messages.\\
+    \textit{Acceptance criterion:} a message sent by a user appears to the other players of the same match without a page refresh.
+
+    \item[FR10 -- Reconnection and session recovery.] The system shall allow a disconnected player to reconnect to the same match.\\
+    \textit{Acceptance criterion:} if the client rejoins with the same identity and the same room code, it recovers the correct current match state.
+
+    \item[FR11 -- Match end and result.] The system shall determine the winner and display the final results screen.\\
+    \textit{Acceptance criterion:} when a victory condition is met, the system transitions to ENDED and displays the winning faction, the roles, and the final status of all players.
+\end{description}
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.9\textwidth]{figures/game_state_machine.png}
+    \caption{State machine of the match phases. Transitions are driven automatically by server-side timers and by \texttt{check\_winner()}.}
+    \label{fig:phase-state-machine}
+\end{figure}
+
+\subsection{Non-Functional Requirements}
+
+\begin{description}
+    \item[NFR1 -- State consistency.] The state of a match shall be consistent across all clients and across all backend replicas.\\
+    \textit{Acceptance criterion:} two clients connected to the same room observe the same match state and the same host, even when served by different backend replicas.
+
+    \item[NFR2 -- Availability.] The system shall remain usable even in the presence of a backend replica failure.\\
+    \textit{Acceptance criterion:} if a backend replica goes down, clients can continue interacting with the match through the remaining active replicas.
+
+    \item[NFR3 -- Fault recovery.] The system shall recover quickly from temporary disconnections of Redis or of a backend instance.\\
+    \textit{Acceptance criterion:} after a temporary disconnection, the backend re-establishes the connection and clients receive the correct state again without the match being recreated.
+
+    \item[NFR4 -- Responsiveness.] Player actions shall be visible to other participants in real time or near real time.\\
+    \textit{Acceptance criterion:} votes, phase changes, chat messages, and reconnections are propagated without requiring a manual page refresh.
+
+    \item[NFR5 -- Match data integrity.] The system shall not lose the current match state during normal operation.\\
+    \textit{Acceptance criterion:} after restarting a single backend replica, the match state remains recoverable from the shared data store.
+
+    \item[NFR6 -- Usability.] The interface shall allow a non-technical user to join and play a match without needing to understand the system's internal details.\\
+    \textit{Acceptance criterion:} a user can complete lobby creation/joining, the lobby phase, and the match using only a browser and a room code.
+\end{description}
+
+\subsection{Implementation Requirements}
+
+\begin{description}
+    \item[IR1 -- Python backend.] The backend shall be implemented in Python using FastAPI and Socket.IO.\\
+    \textit{Acceptance criterion:} the backend service exposes HTTP APIs and WebSocket/Socket.IO channels as specified by the design.
+
+    \item[IR2 -- Web frontend.] The client shall be a Single Page Application built with Vue~3 and Vite.\\
+    \textit{Acceptance criterion:} the application runs in the browser and communicates with the backend via REST and WebSocket.
+
+    \item[IR3 -- Shared state on Redis.] The system shall use Redis as the shared store for lobby state, match state, votes, and timers.\\
+    \textit{Acceptance criterion:} multiple backend replicas read and write the same state without relying on separate local data stores.
+
+    \item[IR4 -- Containerized deployment.] The system shall be executable in containerized environments and support deployment via Docker Compose and Kubernetes.\\
+    \textit{Acceptance criterion:} the full environment starts locally via Compose and can also be deployed on a Kubernetes cluster.
+
+    \item[IR5 -- Observability.] The system shall expose metrics for monitoring purposes.\\
+    \textit{Acceptance criterion:} the backend publishes metrics that can be queried by Prometheus and visualized in Grafana.
+\end{description}
+
+These constraints are consistent with the structure already adopted in the project repository: backend, frontend, Redis, reverse proxy, monitoring stack, and Kubernetes manifests.
+
+\subsection{Features Less Relevant or Not Central}
+
 \begin{itemize}
-  \item The requirements must explain \textbf{what} (not how) the software
-  being produced should do.
-  %
-  \begin{itemize}
-    \item you should not focus on the particular problems, but exclusively on
-    what you want the application to do.
-  \end{itemize}
-
-  \item Requirements must be clearly identified, and possibly numbered
-
-  \item Requirements are divided into:
-  %
-  \begin{itemize}
-    \item \textbf{Functional}: some functionality the software should provide to the user
-
-    \item \textbf{Non-functional}: requirements that do not directly concern behavioural aspects, such as consistency, availability, etc.
-
-    \item \textbf{Implementation}: constrain the entire phase of system realization, 
-    for instance by requiring the use of a specific programming language and/or a specific software tool
-    %
-    \begin{itemize}
-      \item these constraints should be adequately justified by political / economic / administrative reasons\ldots{}
-      \item \ldots{} otherwise, implementation choices should emerge \emph{as  a consequence of} design
-    \end{itemize}
-  \end{itemize}
-
-  \item If there are domain-specific terms, these should be explained in a glossary
-  
-  \item Each requirement must have its own \textbf{acceptance criterion}
-  %
-  \begin{itemize}
-    \item these will be important for the validation phase
-  \end{itemize}
-\end{itemize}
-
-\subsection{Relevant Distributed System Features}
-\label{ds-features}
-
-Motivate which distributed system features are relevant for your project, and which are not.
-%
-\begin{itemize}
-  \item transparency
-  \begin{itemize}
-    \item does your system need to hide distribution details from users or developers?
-    \item is it important that failures, location, or replication are invisible?
-  \end{itemize}
-
-  \item fault tolerance, dependability -- availability, reliability, integrity, maintainability, safety
-  \begin{itemize}
-    \item what happens if a component fails? is uninterrupted service required?
-    \item is data loss or corruption unacceptable?
-    \item how quickly must the system recover from faults?
-  \end{itemize}
-
-  \item scalability
-  \begin{itemize}
-    \item will the system need to handle increasing numbers of users, requests, or data?
-    \item is it expected to grow over time?
-  \end{itemize}
-
-  \item security, trust
-  \begin{itemize}
-    \item is sensitive data being processed or stored?
-    \item are there multiple user roles with different permissions?
-    \item is authentication or authorization required?
-  \end{itemize}
-
-  \item resource sharing
-  \begin{itemize}
-    \item do multiple users or components need access to shared resources?
-    \item is coordination or synchronization needed?
-  \end{itemize}
-
-  \item openness, interoperability, heterogeneity of components
-  \begin{itemize}
-    \item Will your system interact with external systems or use components built with different technologies?
-    \item Is standardization or compatibility important?
-  \end{itemize}
-
-  \item evolvability, maintainability
-  \begin{itemize}
-    \item Will the system need to be updated or extended after deployment?
-    \item Is long-term maintenance a concern?
-  \end{itemize}
-
-  \item performance, concurrency, computation / communication efficiency, bandwidth
-  \begin{itemize}
-    \item Are there strict requirements on response time or throughput?
-    \item Will many operations happen in parallel?
-    \item Is network usage a concern?
-  \end{itemize}
-
-  \item economy, costs  
-  \begin{itemize}
-    \item Are there budget constraints for development, deployment, or operation?
-    \item Is minimizing resource usage important?
-  \end{itemize}
+    \item \textbf{Geographical distribution.} This is not the main motivation for distribution in this project. The system is not designed for users spread across the globe requiring geo-aware routing or replication, but rather to support multiplayer gameplay and backend replication for scalability and fault tolerance.
+    
+    \item \textbf{Heterogeneity beyond the standard web stack.} This is not a strong priority. The system's components are built with different technologies (Vue, FastAPI, Redis), but all communicate through standard protocols (HTTP, WebSocket), and no complex integration with heterogeneous third-party systems is required.
+    
+    \item \textbf{Strong security model.} Security is not the main focus of the project. The system does not process critical personal data or financial transactions; security concerns are essentially limited to enforcing correct game actions and host privileges.
 \end{itemize}
 
 \section{Design}\label{design}

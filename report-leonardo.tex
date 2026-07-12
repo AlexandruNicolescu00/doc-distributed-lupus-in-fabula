@@ -6,6 +6,8 @@
 \usepackage{graphicx}
 \usepackage{cleveref} % this must be the last package to be loaded
 
+\emergencystretch=2em
+
 \newcommand{\emailaddr}[1]{\href{mailto:#1}{\texttt{#1}}}
 
 \title{\LARGE
@@ -236,223 +238,87 @@ These constraints are consistent with the structure already adopted in the proje
 
 \section{Design}\label{design}
 
-This chapter explains the strategies used to meet the requirements identified in the analysis. 
-%
-Ideally, the design should be the same, regardless of the technological choices made during the implementation phase.
+This chapter explains the strategies adopted to meet the requirements identified in the analysis, independently of the specific technologies used in the implementation.
 
-\begin{quote}
-You can re-arrange the sections as you prefer, but all the sections must be present in the end
-\end{quote}
+\subsection{Architecture}
 
-\noindent
-\textbf{Important:} try to motivate your design choices in relation to the requirements and features identified 
-in \cref{requirements} and \cref{ds-features}.
+The system adopts a three-tier architecture with event-driven logic: presentation in a Vue Single Page Application on the client, application logic in a replicated FastAPI/Socket.IO backend, and shared state in Redis. The backend does not treat its in-memory representation as the authoritative source of truth; rather, it reconstructs domain state from Redis on demand and propagates events between replicas through a Redis Pub/Sub channel.
 
-\subsection{Architecture}\label{architecture}
+This style follows directly from NFR1 (state consistency across clients and replicas) and NFR2 (availability under replica failure). Because clients may connect to any backend instance behind the load balancer, no single process can be allowed to hold the only copy of a match's state: if it did, a client routed to a different replica would see a divergent or missing view of the game. Centralizing authoritative state in Redis, and using Pub/Sub purely as a notification mechanism rather than as a source of truth, allows the backend fleet to be horizontally scaled and to lose or gain replicas without breaking the consistency of an ongoing match. This directly satisfies IR3 (shared state on Redis) and IR4 (containerized deployment supporting multiple replicas), while keeping the architectural style independent of the specific deployment target.
 
-\begin{itemize}
-  \item Which architectural style?
-  %
-  \begin{itemize}
-    \item why?
-  \end{itemize}
-\end{itemize}
+\subsection{Infrastructure (NON SO SE E' TUTTO GIUSTO)}
 
-\subsection{Infrastructure}\label{infrastructure}
+The infrastructural components required by the design are: the browser clients, a static frontend server, a reverse proxy / ingress, a pool of backend replicas, a shared in-memory data store (Redis), and a monitoring stack (metrics exporter, Prometheus, Grafana). Concretely this means one frontend service, one logical backend service exposed through multiple replicas, one broker/state-store instance, one externally facing proxy, and two monitoring components, in addition to the client population.
 
-\begin{itemize}
-  \item are there \emph{infrastructural components} that need to be introduced? \emph{how many}?
-  %
-  \begin{itemize}
-    \item e.g.~\emph{clients}, \emph{servers}, \emph{load balancers},
-    \emph{caches}, \emph{databases}, \emph{message brokers},
-    \emph{queues}, \emph{workers}, \emph{proxies}, \emph{firewalls},
-    \emph{CDNs}, \emph{etc.}
-  \end{itemize}
+The introduction of a reverse proxy / ingress is dictated by NFR2 and IR4: since the backend is replicated, something external to the application must be responsible for distributing connections across instances and for presenting a single entry point to clients. The introduction of Redis as a separate infrastructural component follows from IR3: a key-value store reachable by every replica is the only way to keep NFR1 satisfied without resorting to sticky sessions, which would reintroduce a single point of failure per session. The monitoring stack (IR5) is kept as a separate concern from the game logic, consistent with the requirement that observability must not affect the correctness of the state machine.
 
-  \item how do components \emph{distribute} over the network? \emph{where}?
-  %
-  \begin{itemize}
-    \item e.g.~do servers / brokers / databases / etc. sit on the same
-    machine? on the same network? on the same datacenter? on the same
-    continent?
-  \end{itemize}
+Regarding physical/network placement, the project does not require multi-datacenter or multi-continent distribution, consistently with Section~2.4 (geographical distribution is explicitly out of scope). In the Docker Compose deployment, all services run on the same host but are segmented into separate bridge networks so that, for instance, only the backend and Redis can reach each other and the frontend cannot talk to Redis directly. In the Kubernetes deployment, frontend, backend, and Redis are deployed in the same cluster and the same namespace; backend and Redis are exposed only as internal \texttt{ClusterIP} services, while external traffic enters exclusively through the NGINX Ingress. When run locally via Minikube, all components effectively remain on the same node, but the manifests remain valid for a genuinely multi-node cluster, which is the deployment target implied by IR4.
 
-  \item how do components \emph{find} each other?
-  %
-  \begin{itemize}
-    \item how to \emph{name} components?
-    \item e.g.~DNS, \emph{service discovery}, \emph{load balancing},
-    \emph{etc.}
-  \end{itemize}
-\end{itemize}
+Component discovery relies on internal DNS rather than hard-coded addresses, so that the same container images work unmodified across environments. In Docker Compose, service names (\texttt{frontend}, \texttt{backend}, \texttt{redis}) are resolved through the Compose-managed DNS; in Kubernetes, the cluster DNS resolves the corresponding Service names. The frontend receives the backend's externally reachable address at runtime through an environment variable (\texttt{WS\_URL}), rather than at build time, so a single frontend image can be deployed against different backend endpoints. Load balancing across backend replicas is delegated to the proxy/ingress layer (detailed in Section~3.8), which is also how newly joining or reconnecting clients ``find'' an available backend instance without needing to know which physical replica currently serves a given room.
 
-\begin{quote}
-Component diagrams are welcome here
-\end{quote}
+\subsection{Modelling}
 
-\subsection{Modelling}\label{modelling}
+The core domain entities are \texttt{Player}, \texttt{GameState}, \texttt{Role}, \texttt{Phase}, and \texttt{Winner}. At the level of application state this is complemented by the set of votes cast in the current phase, the active phase timer, the identifier of the host, the set of players who have signalled readiness in the lobby, and the final match result.
 
-\begin{itemize}
-  \item which \textbf{domain entities} are there?
-  %
-  \begin{itemize}
-    \item e.g.~\emph{users}, \emph{products}, \emph{orders}, \emph{etc.}
-  \end{itemize}
-  
-  \item how do \emph{domain entities} \textbf{map to} \emph{infrastructural components}?
-  %
-  \begin{itemize}
-    \item e.g.~state of a video game on central server, while inputs/representations on clients
-    \item e.g.~where to store messages in an IM app? for how long?
-  \end{itemize}
+The mapping of these entities onto infrastructural components follows the single-source-of-truth principle already introduced in Section~3.1: authoritative state lives in Redis, phase timers are scheduled locally by whichever backend replica currently owns them but are always validated against the deadline timestamp persisted in Redis, and the frontend keeps only a local, disposable representation of this state in a Pinia store and in session storage. This choice follows from the mapping suggested by NFR1 and NFR5 (match data integrity): since the frontend's copy is never authoritative, losing it (e.g.\ on a page reload) is not a data-loss event. The client can always resynchronize from Redis through the backend.
 
-  \item which \textbf{domain events} are there?
-  %
-  \begin{itemize}
-    \item e.g.~\emph{user registered}, \emph{product added to cart}, \emph{order placed}, \emph{etc.}
-  \end{itemize}
-  
-  \item which sorts of \textbf{messages} are exchanged?
-  %
-  \begin{itemize}
-    \item e.g.~\emph{commands}, \emph{events}, \emph{queries}, \emph{etc.}
-  \end{itemize}
+The domain events supported by the system model the lifecycle of a match: players joining or leaving, players signalling readiness, updates to lobby settings, role assignment, votes being cast, eliminations, the outcome of the seer's night action, the match being paused or resumed, and the match ending. These events are distinct from the messages actually exchanged over the wire, which include both commands sent from client to server and events broadcast from server to clients. Commands include \texttt{player\_ready}, \texttt{update\_settings}, \texttt{cast\_vote}, \texttt{wolf\_vote}, \texttt{seer\_action}, \texttt{kick\_player}, \texttt{play\_again}, and \texttt{return\_to\_lobby}; events include \texttt{game\_state\_sync}, \texttt{player\_joined}, \texttt{player\_left}, \texttt{phase\_changed}, \texttt{role\_assigned}, \texttt{vote\_update}, \texttt{game\_paused}, \texttt{game\_resumed}, and \texttt{game\_ended}, among others. Separating commands (intents, which may be rejected) from events (facts, which have already happened) keeps the authorization logic of Section~3.9 straightforward: a command can fail server-side validation, while an event, once emitted, is simply a notification of a state change that has already been committed to Redis.
 
-  \item what information does the \textbf{state} of the system comprehend
-  %
-  \begin{itemize}
-    \item e.g.~\emph{users' data}, \emph{products' data}, \emph{orders' data}, \emph{etc.}
-  \end{itemize}
-\end{itemize}
+Overall, the state of the system comprehends: room and player identifiers, the current phase and its deadline, role assignments, the vote map for the day phase and the equivalent structure for the werewolves' night vote, the seer's investigation result, the set of ready players, the host identifier, and the final winner once the match concludes. Grouping this information under a room-scoped key in Redis (rather than, say, one global table) directly reflects the natural partitioning of the domain: no query ever needs to span multiple rooms at once, which will also justify the choice of a key-value model in Section~3.6.
 
-\begin{quote}
-Class diagram are welcome here
-\end{quote}
+\subsection{Interaction}
 
-\subsection{Interaction}\label{interaction}
+Components communicate through two channels: a WebSocket-based Socket.IO channel between each client and whichever backend replica accepted its connection, and a Redis Pub/Sub channel among all backend replicas. On connection, the client supplies a \texttt{client\_id} and a \texttt{room\_id} as part of the Socket.IO authentication payload; the backend checks that the identifier is not already active in the room, verifies that the current match phase still allows new participants to join, registers the socket in the room, and replies with a full state snapshot through a \texttt{game\_state\_sync} event. This request/response-like exchange at connection time is what allows a reconnecting or newly routed client to obtain a consistent view of the match regardless of which replica served the previous connection, directly supporting NFR1 and NFR3 (fault recovery).
 
-\begin{itemize}
-  \item how do components \emph{communicate}? \emph{when}? \emph{what}?
-  \item \emph{which} \textbf{interaction patterns} do they enact?
-\end{itemize}
+During the lobby phase, the interaction pattern is asymmetric: the host may modify settings, start the match, or remove a player, while regular clients may only mark themselves as ready; during the match, players send either a vote or a night action, and the backend decides when a phase has collected enough input to advance. This keeps the client thin and prevents any client from unilaterally advancing the shared state, which is a prerequisite for the consistency guarantee of NFR1.
 
-\begin{quote}
-Sequence diagrams are welcome here
-\end{quote}
+Cross-replica interaction follows a publish/relay pattern: the replica that processes a command publishes the resulting event on a Redis channel; every other replica subscribed to that channel receives it and re-emits it to its own locally connected clients. Private events (such as a player's assigned role or the seer's investigation outcome) are addressed to a specific \texttt{target\_client\_id} so that the relaying replica can deliver them to the correct socket even when the recipient is connected to a different instance than the one that generated the event. This pattern effectively turns the pool of stateless-with-respect-to-domain-state replicas into a single logical broadcast domain, which is what makes NFR1 achievable without a shared-memory backend process.
 
-\subsection{Behaviour}\label{behaviour}
+\subsection{Behaviour}
 
-\begin{itemize}
-  \item how does \emph{each} component \textbf{behave} individually (e.g.~in \emph{response} to \emph{events} or messages)?
-  \begin{itemize}
-    \item some components may be \emph{stateful}, others \emph{stateless}
-  \end{itemize}
+Individually, each backend replica behaves mostly as a stateless request handler with respect to game logic: no replica keeps a private, authoritative copy of any match. What each replica does retain locally is short-lived bookkeeping: the mapping from local socket identifiers to room/client pairs, the asyncio tasks backing phase timers and disconnection grace periods, and its own Pub/Sub subscriptions. This separation is intentional: it allows any replica to be killed and restarted without losing match data, since nothing irreplaceable lives only in that process's memory.
 
-  \item which components are in charge of updating the \textbf{state} of the system? \emph{when}? \emph{how}?
-\end{itemize}
+State updates are performed through Redis primitives chosen specifically for the concurrency guarantees they provide: \texttt{SET NX} is used to atomically create a room and elect its first host, avoiding a race where two clients both believe they created the same room; \texttt{WATCH}/\texttt{MULTI} transactions guard read-modify-write sequences (such as updating the vote map) against lost updates when two replicas act on the same room concurrently; pipelining is used to batch bulk updates without incurring multiple round trips; and a \texttt{NX}-with-TTL lock serializes phase-advancement so that only one replica actually transitions a room from one phase to the next, even if several replicas' timers fire close together.
 
-\begin{quote}
-State diagrams are welcome here
-\end{quote}
+The progression of a match is driven by two complementary mechanisms. Each replica schedules local timers for the phase it believes is active, and phase advancement is attempted when a timer fires; a periodic sweeper additionally scans for phases whose deadline has already elapsed, which recovers cases where the owning replica died before its timer fired. In parallel, an anti-entropy loop periodically re-broadcasts an authoritative snapshot of the match state to connected clients, which corrects for any Pub/Sub message that a client might have missed due to a transient disconnection. Together, these two mechanisms are the principal way the design satisfies NFR3 and NFR4 (responsiveness): the system does not rely solely on the reliable, in-order delivery of every single event, because reliable delivery cannot be assumed across process and network boundaries.
 
-\subsection{Data and Consistency Issues}\label{data-and-consistency-issues}
+Disconnection handling follows a similar philosophy: if a player disconnects while a match is in progress, they are not removed immediately but are placed in a twenty-second grace period during which reconnection restores their previous state; only if that window elapses without a reconnection is the player eliminated. If the disconnecting player happens to be the host, a new host is elected among the remaining participants. This grace period is a direct response to NFR4 and to the fact that WebSocket connections over real networks are expected to drop transiently; treating every disconnection as final would make normal network jitter indistinguishable from a player intentionally leaving.
 
-\begin{itemize}
-  \item Is there any data that needs to be stored?
-  %
-  \begin{itemize}
-    \item \emph{what} data? \emph{where}? \emph{why}?
-  \end{itemize}
-  
-  \item how should \emph{persistent data} be \textbf{stored}?
-  %
-  \begin{itemize}
-    \item e.g.~relations, documents, key-value, graph, etc.
-    \item why?
-  \end{itemize}
-  
-  \item Which components perform queries on the database?
-  %
-  \begin{itemize}
-    \item \emph{when}? \emph{which} queries? \emph{why}?
-    \item concurrent read? concurrent write? why?
-  \end{itemize}
-  
-  \item Is there any data that needs to be shared between components?
-  %
-  \begin{itemize}
-    \item \emph{why}? \emph{what} data?
-  \end{itemize}
-\end{itemize}
+\subsection{Data and Consistency Issues}
 
-\subsection{Fault-Tolerance}\label{fault-tolerance}
+The data that needs to be persisted comprises the full match state, the list of players and their attributes, the current votes and werewolves' votes, the seer's pending or resolved action, the timestamp marking the end of the current phase, and the set of currently active rooms; all of it is stored in Redis with a six-hour time-to-live, after which an abandoned room is automatically reclaimed. Storing this data in Redis rather than only in backend process memory is what makes NFR5 achievable: restarting a single replica must not destroy an ongoing match, and it does not, because the replica never held the only copy of that data to begin with.
 
-\begin{itemize}
-  \item Is there any form of data \textbf{replication} / federation / sharing?
-  %
-  \begin{itemize}
-    \item \emph{why}? \emph{how} does it work?
-  \end{itemize}
-  
-  \item Is there any \textbf{heart-beating}, \textbf{timeout}, \textbf{retry mechanism}?
-  %
-  \begin{itemize}
-    \item \emph{why}? \emph{among} which components? \emph{how} does it work?
-  \end{itemize}
-  
-  \item Is there any form of \textbf{error handling}?
-  %
-  \begin{itemize}
-    \item \emph{what} happens when a component fails? \emph{why}? \emph{how}?
-  \end{itemize}
-\end{itemize}
+The persistence model is key-value, using Redis hashes and sets rather than a relational schema. This choice follows from the access pattern implied by the domain model of Section~3.3: essentially every read and write is scoped to a single room, there are no cross-room joins or aggregate queries, and what the game needs are frequent small reads, small atomic updates, and fast propagation of state between replicas (exactly the operations Redis is optimized for, and a poor match for the overhead of a relational engine).
 
-\subsection{Availability}\label{availability}
+All queries against Redis are issued by the backend; the frontend never talks to the data store directly, which keeps every state mutation subject to the authorization checks discussed in Section~3.9. The most significant queries are: scanning the set of currently open lobbies, loading the full state of a room on (re)connection, reading the list of players in a room, reading and writing the vote map during a phase, and retrieving the deadline of the active timer. Because multiple replicas may read and write the same room concurrently (for instance, two players voting at nearly the same time through two different replicas) the design assumes concurrent reads and concurrent writes as the normal case, not an edge case, and addresses them with the \texttt{WATCH}/\texttt{MULTI} transactions, the phase-advancement lock, and Pub/Sub event deduplication already described in Section~3.5.
 
-\begin{itemize}
-  \item Is there any \textbf{caching} mechanism?
-  %
-  \begin{itemize}
-    \item \emph{where}? \emph{why}?
-  \end{itemize}
-  
-  \item Is there any form of \textbf{load balancing}?
-  %
-  \begin{itemize}
-    \item \emph{where}? \emph{why}?
-  \end{itemize}
+Certain pieces of state are, by construction, shared between components rather than owned by a single one: the room identifier, the client identifier, the host identifier, the set of ready player identifiers, the vote map, the phase deadline, and the room snapshot broadcast to clients. For each of these, the frontend only ever holds a disposable, locally cached copy, while the backend and Redis jointly hold the authoritative version.
 
-  \item In case of \textbf{network partitioning}, how does the system behave?
-  %
-  \begin{itemize}
-    \item \emph{why}? \emph{how}?
-  \end{itemize}
-\end{itemize}
+\subsection{Fault-Tolerance}
 
-\subsection{Security}\label{security}
+The current deployment does not replicate Redis itself: it runs as a single instance backed by a persistent volume with AOF/RDB persistence enabled, so a Redis restart can recover its last persisted state, but Redis remains a single point of failure for the data tier. This is an accepted trade-off given the scope defined in Section~2.4 (the project's goal is backend replication for scalability and fault tolerance at the application tier, not a fully replicated storage layer) but the application code is nonetheless written defensively with respect to temporary Redis unavailability, since a transient network partition between a backend replica and Redis is a realistic failure mode even with a single Redis instance.
 
-\begin{itemize}
-  \item Is there any form of \textbf{authentication}?
-  %
-  \begin{itemize}
-    \item \emph{where}? \emph{why}?
-  \end{itemize}
+Concretely, fault tolerance at the communication layer relies on retries with exponential backoff for \texttt{PUBLISH} operations, automatic reconnection to the Redis broker, deduplication of events that a replica might otherwise re-process after reconnecting, and resubscription to the relevant Pub/Sub channels once a connection is restored. These mechanisms exist specifically to satisfy NFR3: the system must recover quickly from a temporary disconnection of Redis or of a backend instance, without requiring the match itself to be recreated.
 
-  \item Is there any form of \textbf{authorization}?
-  %
-  \begin{itemize}
-    \item which sort of \emph{access control}?
-    \item which sorts of users / \emph{roles}? which \emph{access rights}?
-  \end{itemize}
+At the client level, if a WebSocket connection drops, the frontend attempts reconnection and, once reconnected, rebuilds its view of the match entirely from the \texttt{game\_state\_sync} snapshot rather than from any locally cached delta. This is deliberate, since a locally reconstructed state could easily have drifted from the authoritative one during the outage. At the infrastructure level, if a backend replica crashes, Kubernetes restarts the corresponding pod, and clients previously connected to it are routed to a surviving replica by the ingress on their next reconnection attempt. Finally, error handling at the application level favours explicit rejection over silent recovery: invalid or out-of-order commands result in an explicit error response, or in the connection being refused outright, rather than being partially applied. This is what prevents a malformed or illegitimate action from corrupting the shared match state.
 
-  \item Are \textbf{cryptographic schemas} being used?
-  %
-  \begin{itemize}
-    \item e.g.~token verification,
-    \item e.g.~data encryption, etc.
-  \end{itemize}
-\end{itemize}
+\subsection{Availability}
+
+There is no separate application-level cache in the design; Redis itself serves as the single shared state layer, and the only caching present is ordinary HTTP caching of static frontend assets (JavaScript, CSS, images) served by the frontend's NGINX container with aggressive cache headers. A dedicated cache in front of Redis was judged unnecessary given the access pattern described in Section~3.6: state is small, room-scoped, and already served from an in-memory store, so introducing a second caching tier would add complexity and a further consistency concern without a clear performance benefit.
+
+Load balancing is present at two points, consistent with IR4's requirement that the system support both Docker Compose and Kubernetes deployment. In the Compose setup, a reverse-proxy NGINX instance sits in front of both the frontend and the backend; in Kubernetes, the NGINX Ingress distributes WebSocket connections across backend replicas, effectively round-robin. This is what allows the backend to be scaled horizontally to satisfy NFR2, since new connections (and, on reconnection, previously served clients) can land on any healthy replica rather than being pinned to the one that first accepted them.
+
+In the presence of a network partition, the system is designed to fail soft rather than to fail closed. A client that loses connectivity to its backend replica simply sees its WebSocket connection drop; on reconnection, it recovers a consistent view of the match from the shared source of truth in Redis rather than from any state it may have cached locally, satisfying NFR3. Symmetrically, if a backend replica temporarily loses its connection to Redis, it attempts reconnection rather than failing over to a degraded local state, and phase timers are protected by comparing the locally scheduled deadline against the deadline currently stored in Redis before acting, which prevents a replica that was partitioned from Redis for a period of time from advancing a phase twice or from acting on a deadline that has since been superseded. Finally, the Kubernetes deployment is configured for backend high availability independently of any specific partition scenario: it starts with two replicas, performs rolling updates without downtime, and uses readiness, liveness, and startup probes together with a \texttt{preStop} hook to drain in-flight connections before a pod is terminated, which together support NFR2 under both planned rollouts and unplanned failures.
+
+\subsection{Security}
+
+The system does not implement strong authentication in the sense of usernames and passwords, tokens, or JWTs. A player's identity is instead based on a \texttt{client\_id} generated and stored client-side and passed as part of the Socket.IO connection handshake. This is a deliberate simplification consistent with Section~2.4, which explicitly places a strong security model outside the project's priorities: the system does not handle personal data beyond a nickname, nor financial transactions, so the cost of a full authentication subsystem was judged disproportionate to the actual risk surface.
+
+Authorization, in contrast, is enforced at the application level and is not optional: only the host may change lobby settings, start the match, remove a player, or restart the room; only players who are still alive may vote or perform a night action; and only players holding the relevant role may invoke role-specific night actions such as the seer's investigation or the werewolves' vote. This access-rights model is coarse-grained by design: a single privileged role (host) versus regular players, further refined by liveness and role checks during the match, which matches the actual set of roles the game defines and avoids introducing an access-control abstraction more general than the domain requires.
+
+Server-side validation also rejects requests that are inconsistent with the current phase of the match, independently of who issues them: a new client cannot join a match that has already started or already ended, and a duplicate nickname within the same room is rejected at connection time. This phase-aware validation is what keeps the authorization model of the previous paragraph meaningful and it directly supports the state-consistency goal of NFR1 by preventing illegitimate transitions from ever reaching the shared state in Redis.
+
+No cryptographic scheme is applied at the application level: there is no message signing and no end-to-end encryption of the game payloads. Transport security is instead delegated to the deployment layer; the Docker Compose configuration already reserves port 443 for a future TLS-terminating proxy, but in the current codebase traffic between clients and backend travels as plain HTTP/WebSocket. This is consistent with the scope defined in Section~2.4: given that the payloads exchanged are gameplay events rather than sensitive data, the immediate priority was correctness of the distributed game logic rather than confidentiality of its traffic, with TLS termination left as an infrastructural addition rather than an application-level concern.
 
 \section{Implementation}\label{implementation}
 
@@ -595,5 +461,8 @@ Also discuss here any unimplemented feature, and how you would have implemented 
 
 \bibliographystyle{plain}
 \bibliography{references}
+
+% inserito per sopprimere errore "No citations found". Rimuovere alla fine
+\nocite{*} 
 
 \end{document}

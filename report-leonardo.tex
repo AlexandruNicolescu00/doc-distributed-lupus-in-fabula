@@ -256,6 +256,13 @@ Regarding physical/network placement, the project does not require multi-datacen
 
 Component discovery relies on internal DNS rather than hard-coded addresses, so that the same container images work unmodified across environments. In Docker Compose, service names (\texttt{frontend}, \texttt{backend}, \texttt{redis}) are resolved through the Compose-managed DNS; in Kubernetes, the cluster DNS resolves the corresponding Service names. The frontend receives the backend's externally reachable address at runtime through an environment variable (\texttt{WS\_URL}), rather than at build time, so a single frontend image can be deployed against different backend endpoints. Load balancing across backend replicas is delegated to the proxy/ingress layer (detailed in Section~3.8), which is also how newly joining or reconnecting clients ``find'' an available backend instance without needing to know which physical replica currently serves a given room.
 
+\begin{figure}
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/component_diagram.png}
+    \caption{Component diagram}
+    \label{fig:component}
+\end{figure}
+
 \subsection{Modelling}
 
 The core domain entities are \texttt{Player}, \texttt{GameState}, \texttt{Role}, \texttt{Phase}, and \texttt{Winner}. At the level of application state this is complemented by the set of votes cast in the current phase, the active phase timer, the identifier of the host, the set of players who have signalled readiness in the lobby, and the final match result.
@@ -266,6 +273,13 @@ The domain events supported by the system model the lifecycle of a match: player
 
 Overall, the state of the system comprehends: room and player identifiers, the current phase and its deadline, role assignments, the vote map for the day phase and the equivalent structure for the werewolves' night vote, the seer's investigation result, the set of ready players, the host identifier, and the final winner once the match concludes. Grouping this information under a room-scoped key in Redis (rather than, say, one global table) directly reflects the natural partitioning of the domain: no query ever needs to span multiple rooms at once, which will also justify the choice of a key-value model in Section~3.6.
 
+\begin{figure}
+    \centering
+    \includegraphics[width=0.75\textwidth]{figures/class_diagram.png}
+    \caption{Class diagram}
+    \label{fig:class}
+\end{figure}
+
 \subsection{Interaction}
 
 Components communicate through two channels: a WebSocket-based Socket.IO channel between each client and whichever backend replica accepted its connection, and a Redis Pub/Sub channel among all backend replicas. On connection, the client supplies a \texttt{client\_id} and a \texttt{room\_id} as part of the Socket.IO authentication payload; the backend checks that the identifier is not already active in the room, verifies that the current match phase still allows new participants to join, registers the socket in the room, and replies with a full state snapshot through a \texttt{game\_state\_sync} event. This request/response-like exchange at connection time is what allows a reconnecting or newly routed client to obtain a consistent view of the match regardless of which replica served the previous connection, directly supporting NFR1 and NFR3 (fault recovery).
@@ -273,6 +287,13 @@ Components communicate through two channels: a WebSocket-based Socket.IO channel
 During the lobby phase, the interaction pattern is asymmetric: the host may modify settings, start the match, or remove a player, while regular clients may only mark themselves as ready; during the match, players send either a vote or a night action, and the backend decides when a phase has collected enough input to advance. This keeps the client thin and prevents any client from unilaterally advancing the shared state, which is a prerequisite for the consistency guarantee of NFR1.
 
 Cross-replica interaction follows a publish/relay pattern: the replica that processes a command publishes the resulting event on a Redis channel; every other replica subscribed to that channel receives it and re-emits it to its own locally connected clients. Private events (such as a player's assigned role or the seer's investigation outcome) are addressed to a specific \texttt{target\_client\_id} so that the relaying replica can deliver them to the correct socket even when the recipient is connected to a different instance than the one that generated the event. This pattern effectively turns the pool of stateless-with-respect-to-domain-state replicas into a single logical broadcast domain, which is what makes NFR1 achievable without a shared-memory backend process.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\textwidth]{figures/sequence_diagram.png}
+    \caption{Sequence diagram}
+    \label{fig:sequence}
+\end{figure}
 
 \subsection{Behaviour}
 
@@ -283,6 +304,13 @@ State updates are performed through Redis primitives chosen specifically for the
 The progression of a match is driven by two complementary mechanisms. Each replica schedules local timers for the phase it believes is active, and phase advancement is attempted when a timer fires; a periodic sweeper additionally scans for phases whose deadline has already elapsed, which recovers cases where the owning replica died before its timer fired. In parallel, an anti-entropy loop periodically re-broadcasts an authoritative snapshot of the match state to connected clients, which corrects for any Pub/Sub message that a client might have missed due to a transient disconnection. Together, these two mechanisms are the principal way the design satisfies NFR3 and NFR4 (responsiveness): the system does not rely solely on the reliable, in-order delivery of every single event, because reliable delivery cannot be assumed across process and network boundaries.
 
 Disconnection handling follows a similar philosophy: if a player disconnects while a match is in progress, they are not removed immediately but are placed in a twenty-second grace period during which reconnection restores their previous state; only if that window elapses without a reconnection is the player eliminated. If the disconnecting player happens to be the host, a new host is elected among the remaining participants. This grace period is a direct response to NFR4 and to the fact that WebSocket connections over real networks are expected to drop transiently; treating every disconnection as final would make normal network jitter indistinguishable from a player intentionally leaving.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/state_diagram.png}
+    \caption{State diagram}
+    \label{fig:state}
+\end{figure}
 
 \subsection{Data and Consistency Issues}
 

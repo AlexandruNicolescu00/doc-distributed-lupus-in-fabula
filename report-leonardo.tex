@@ -567,15 +567,115 @@ curl http://game.local/health
 
 \section{User Guide}\label{user-guide}
 
+\subsection{Application Workflow Overview}
+
+The \emph{Lupus in Fabula} application follows a linear and intentionally simple workflow, designed to guide the user through four consecutive macro-phases: \texttt{Home} $\rightarrow$ \texttt{Lobby} $\rightarrow$ \texttt{Game} $\rightarrow$ \texttt{Results}. This structure is directly reflected in the frontend routing. The following sections describe in detail how users interact with each of these phases, the expected outcomes at each step, and finally provide a visual walkthrough of the interface.
+
+\subsection{Usage}
+\label{sec:usage}
+
+\subsubsection{Starting the Application}
+
+The system is used by starting the application and opening the frontend in a web browser. In a local development environment, the typical address is \texttt{http://localhost}, while in a Kubernetes deployment the expected address is \texttt{http://game.local}. Once opened, the user is presented with the home page, from which they can either create a new game or join an existing lobby.
+
+\subsubsection{Creating a New Lobby}
+
+To create a new game, the user selects the \texttt{Create Game} option, enters their name, and confirms the creation. This action creates a new lobby in which the user automatically becomes the host.
+
+\subsubsection{Joining an Existing Lobby}
+
+Alternatively, the user can select \texttt{Join Lobby}, enter their name, choose one of the available rooms from the list of open lobbies, and confirm the selection.
+
+\subsubsection{Preparing the Game}
+
+Inside the lobby, the host can configure the game settings, particularly the number of werewolves and seers participating in the match. Non-host players can instead mark themselves as \emph{Ready}. Only when the minimum required number of players has joined and everyone is marked as ready can the host start the game.
+
+\subsubsection{Playing the Game}
+
+During gameplay, the main game screen continuously displays the current phase, the phase timer, the list of players, the chat, the role assigned to the player, and the actions available according to both role and game phase. The game alternates between two main phases:
+
 \begin{itemize}
-  \item how to use your software?
-  %
-  \begin{itemize}
-    \item provide instructions
-    \item provide expected outcomes
-    \item provide screenshots if possible
-  \end{itemize}
+    \item \textbf{Day}: players discuss and vote to eliminate another player.
+    \item \textbf{Night}: the werewolves choose a victim, the seer may inspect another player, while villagers cannot perform actions and simply wait for the countdown to end.
 \end{itemize}
+
+\subsubsection{Handling Disconnections and Reconnections}
+
+The system is designed to transparently handle temporary connection interruptions. If the browser is refreshed or the connection is lost, the client automatically attempts to restore the session using a \texttt{client\_id} stored in \texttt{sessionStorage}, allowing the player to rejoin the ongoing game.
+
+\subsubsection{Viewing the Final Results}
+
+At the end of the game, the final results screen is displayed, announcing the winning team, revealing the roles of all players, and presenting a summary of the game statistics.
+
+\subsection{Expected Outcomes}
+\label{sec:expected-outcomes}
+
+This section summarizes the expected user experience for each of the application's main screens.
+
+\subsubsection{Home}
+
+On the home page, users expect to find two clearly distinguishable call-to-action buttons (\texttt{Create Game} and \texttt{Join Lobby}), a list of available lobbies when choosing to join a game, and validation of the entered player name before proceeding.
+
+\subsubsection{Lobby}
+
+On the lobby screen, users expect to see a clearly visible room code, the number of connected players, the ready status of each participant, the role configuration panel, and a \emph{Start Game} button that is enabled only for the host and only when all required conditions have been satisfied. The lobby status is updated in real time through WebSockets.
+
+\subsubsection{Game}
+
+During gameplay, users expect real-time updates of the current phase, a visible timer synchronized across all connected clients, actions that vary depending on the assigned role, an integrated chat, and clear visual feedback for votes, night actions, and possible reconnections. Actions that are not allowed according to the current role or game phase are directly rejected by the backend.
+
+\subsubsection{Results}
+
+On the final results screen, users expect a clear indication of the winning team, the revelation of every player's role, a summary of the match statistics, and the possibility to start another match (for the host, who can restart the room) or return to the lobby or home page (for the other players).
+
+\subsection{Visual Walkthrough}
+
+This section presents a visual walkthrough of the application's main screens.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/screenshot_home.png}
+    \caption{Application home page showing the two main options: \texttt{Create Game} and \texttt{Join Lobby}.}
+    \label{fig:screenshot-home}
+\end{figure}
+
+As shown in Figure~\ref{fig:screenshot-home}, the home page represents the application's entry point and offers the two options described in Section~\ref{sec:usage}.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/screenshot_lobby.png}
+    \caption{Lobby screen displaying the connected players and the game configuration panel.}
+    \label{fig:screenshot-lobby}
+\end{figure}
+
+Figure~\ref{fig:screenshot-lobby} shows the lobby screen described in Section~\ref{sec:usage}, highlighting the room code, the list of connected players, and each player's \emph{Ready} status.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/screenshot_game_day.png}
+    \caption{Game screen during the day phase, while voting is in progress.}
+    \label{fig:screenshot-game-day}
+\end{figure}
+
+As described in Section~\ref{sec:usage}, during the day phase (Figure~\ref{fig:screenshot-game-day}) players discuss and vote to eliminate another player.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/screenshot_game_night.png}
+    \caption{Game screen during the night phase, showing actions available only to the werewolves and the seer.}
+    \label{fig:screenshot-game-night}
+\end{figure}
+
+Figure~\ref{fig:screenshot-game-night} illustrates the night phase, during which the werewolves choose a victim and the seer may inspect another player, while villagers wait for the phase to end.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/screenshot_results.png}
+    \caption{Final results screen announcing the winning team and revealing all player roles.}
+    \label{fig:screenshot-results}
+\end{figure}
+
+Finally, Figure~\ref{fig:screenshot-results} shows the results screen described in Section~\ref{sec:expected-outcomes}, where the identities of all players are revealed and a summary of the completed match is presented.
 
 \section{Self-evaluation}\label{self-evaluation}
 

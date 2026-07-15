@@ -390,47 +390,89 @@ At the infrastructure level, \texttt{NGINX} acts as the reverse proxy in front o
 
 \section{Validation}\label{validation}
 
-\subsection{Automatic Testing}\label{automatic-testing}
+Validation combines three layers of automated testing: unit, integration, and end-to-end, with manual acceptance testing of the parts of the system that automated tests do not cover well.
 
-\begin{itemize}
-  \item how were individual components \textbf{\emph{unit}-test}ed?
-  
-  \item how was communication, interaction, and/or integration among components tested?
-  
-  \item how to \textbf{\emph{end-to-end}-test} the system?
-  %
-  \begin{itemize}
-    \item e.g.~production vs.~test environment
-  \end{itemize}
+\subsection{Automatic Testing}
 
-  \item for each test specify:
-  %
-  \begin{itemize}
-    \item rationale of individual tests
-    \item how were the test automated
-    \item how to run them
-    \item which requirement they are testing, if any
-  \end{itemize}
-\end{itemize}
+\subsubsection{Unit testing of individual components}
 
-\begin{quote}
-recall that \emph{deployment} \textbf{automation} is commonly used to \emph{test} the system in \emph{production-like} environment
-\end{quote}
+Domain logic and the Redis access layer are unit-tested in isolation, using \texttt{fakeredis} in place of a real Redis instance so that these tests remain fast, deterministic, and free of external dependencies. On the backend, \texttt{backend/tests/test\_game\_logic.py} covers role assignment, winner computation, vote tallying, night-action resolution, and phase transitions; \texttt{backend/tests/test\_lobby\_logic.py} covers host election, ready-state handling, and lobby rules; \texttt{backend/tests/test\_state\_store.py} covers persistence and retrieval of state through the Redis access layer. On the frontend, Vitest tests under \texttt{frontend/src/\_\_tests\_\_/} cover the Pinia store, composables, and the mapping between incoming Socket.IO events and store mutations.
 
-\begin{quote}
-recall to test corner cases (crashes, errors, etc.)
-\end{quote}
+The rationale for this layer is to validate the correctness of functions that are pure or nearly pure (game rules, state serialization, UI-facing derived values) and to catch regressions on them independently of the network or of Redis. This is also where corner cases are exercised most directly, such as a player with no assigned role yet, an already-expired phase timer, a match with the minimum allowed number of players, or an empty initial lobby state. These tests are automated with \texttt{pytest} and \texttt{pytest-asyncio} on the backend and with \texttt{vitest} on the frontend; fixtures and mocks make it possible to run the full suite repeatedly without starting Redis or a browser. They are run with:
 
-\subsection{Acceptance test}\label{acceptance-test}
+\begin{verbatim}
+cd backend
+pytest
 
-\begin{itemize}
-  \item did you perform any \emph{manual} testing?
-  %
-  \begin{itemize}
-    \item what did you test?
-    \item why wasn't it automatic?
-  \end{itemize}
-\end{itemize}
+cd frontend
+npm install
+npm run test:unit
+\end{verbatim}
+
+Because this layer targets domain logic rather than distributed behaviour, it does not map to a single numbered requirement; instead, it underlies the correctness assumptions that every higher-level requirement (in particular NFR1, state consistency) depends on.
+
+\subsubsection{Integration testing among components}
+
+A second layer of tests verifies interaction between modules that cooperate on the same piece of state within a single replica, rather than each module in isolation. This includes \texttt{backend/tests/test\_lobby\_runtime.py}, \texttt{backend/tests/test\_backend-init.py}, and \texttt{backend/tests/test\_distributed\_safety.py}. These tests check both that the runtime logic emits the expected events for a given sequence of commands, and that the Redis concurrency primitives introduced in Section~3.5 (atomic host creation, the phase-advancement lock, concurrent state patches, and bulk persistence) behave correctly under the conditions they were designed for.
+
+The rationale here is that individually correct components can still misbehave once combined, and the places where this is most likely to happen are exactly the sensitive points of the distributed design: two replicas racing to create the same room, two timers racing to advance the same phase, two concurrent patches to the same room's vote map, and the propagation of state through Redis Pub/Sub. \texttt{backend/tests/test\_distributed\_safety.py} in particular targets this layer directly, covering atomic host creation, the phase-advancement lock, atomic state patching via a \texttt{state\_version} field, active-room bookkeeping, and bulk pipeline updates. These tests are automated with the same \texttt{pytest}/\texttt{pytest-asyncio} setup as the unit-test layer, and are run selectively with:
+
+\begin{verbatim}
+cd backend
+pytest backend/tests/test_lobby_runtime.py
+pytest backend/tests/test_distributed_safety.py
+\end{verbatim}
+
+\subsubsection{End-to-end / system testing}
+
+The repository also includes standalone Python scripts that open genuine Socket.IO/WebSocket connections against a running backend, exercising the system as a whole rather than through direct function calls: \texttt{tests/test\_multi\_instance.py}, \texttt{tests/test\_reconnection.py}, \texttt{tests/load\_test.py}, and \texttt{tests/diag\_loss.py}. Their rationale is precisely to cover what the two lower layers cannot: real client/server communication over the network, cross-instance propagation through Redis Pub/Sub, reconnection behaviour, event deduplication, and robustness under load (i.e.\ the behavioural guarantees promised by NFR1 through NFR4 and by the fault-tolerance mechanisms of Section~3.7, observed end-to-end rather than assumed from unit-level correctness).
+
+\texttt{test\_multi\_instance.py} and \texttt{test\_reconnection.py} support both a URL reached through the ingress/reverse proxy and direct access to individual pods via \texttt{kubectl port-forward}, which allows the same test logic to validate both an already-load-balanced deployment and a specific replica in isolation.
+
+The corner cases explicitly exercised at this layer include: loss or delay of Pub/Sub messages, a client reconnecting to a different backend instance than the one it was originally connected to, a duplicate-host race, both local (same-replica) and cross-instance broadcast, bursts of messages arriving in a short window, and disconnection followed by state recovery on reconnection. They are run as:
+
+\begin{verbatim}
+# System test distributed across multiple replicas
+python tests/test_multi_instance.py --url http://localhost
+
+# Reconnection and state consistency
+python tests/test_reconnection.py --url http://localhost
+
+# Message-loss diagnostics
+python tests/diag_loss.py ws://game.local/ws
+
+# Load test
+python tests/load_test.py --url http://localhost --clients 500 --procs 4
+\end{verbatim}
+
+Before running these more expensive tests, there are also some lightweight smoke checks meant to confirm that the backend, the WebSocket layer, and the reverse proxy are all reachable:
+
+\begin{verbatim}
+curl http://localhost/health
+wscat -c "ws://localhost/ws/test_room?client_id=test123"
+\end{verbatim}
+
+\begin{table}
+\centering
+\small
+\begin{tabular}{p{2.1cm} p{3.4cm} p{4.2cm} p{2.5cm}}
+\hline
+\textbf{Layer} & \textbf{What it validates} & \textbf{Rationale} & \textbf{Requirement(s)} \\
+\hline
+Unit & Domain rules, state serialization, UI derivations, in isolation via \texttt{fakeredis} / mocks & Fast, deterministic feedback on pure logic and corner cases & Underlies NFR1 \\
+Integration & Cooperating runtime modules and Redis concurrency primitives on a single replica & Individually-correct components can still misbehave once combined at sensitive points & Atomic host creation, phase lock, atomic patching, active-room bookkeeping, bulk updates \\
+End-to-end & Real network communication, cross-replica propagation, reconnection, load & Only observable with a running system, not from function calls & NFR1--NFR4 \\
+\hline
+\end{tabular}
+\caption{Summary of the automated testing layers.}
+\label{tab:test-summary}
+\end{table}
+
+\subsection{Acceptance test}
+
+Alongside automated testing, the project relies on manual acceptance testing focused on the parts of the system that are inherently tied to how a real user experiences the application through the browser. The scenarios exercised manually are the complete gameplay flow (creating and joining a lobby, host handling, toggling ready/not-ready, starting a match, progressing through phases, performing night actions, and viewing the final result) together with the behaviour of the interface when a player disconnects and later reconnects, real-time updates of player lists, timers, votes, and roles, and visual/behavioural consistency across multiple browsers and multiple tabs.
+
+This testing was not automated for a specific reason: what it verifies is partly a visual and interactive quality: layout, role banners, the perceived responsiveness of the interface, and the consistency between backend state and what is actually rendered on screen, rather than a functional property that a script can assert on. Fully automating it would require a complete browser-based end-to-end layer, which was judged to be considerably more expensive to build and maintain than the combination of logic-level automated tests already described in Section~5.1 and targeted manual passes over the actual UI.
 
 \section{Deployment}\label{deployment}
 

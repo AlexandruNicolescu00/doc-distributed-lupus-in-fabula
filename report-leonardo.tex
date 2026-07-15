@@ -350,52 +350,43 @@ No cryptographic scheme is applied at the application level: there is no message
 
 \section{Implementation}\label{implementation}
 
-Please report here all the implementation (technology-dependent) choices you made while implementing your design.
+\subsection{Network protocols}
 
-\begin{quote}
-  If you run out of time for this project, you may consider leaving some aspect unimplemented, 
-  and simply discuss how you would have implemented them.
-  %
-  In this case, better would be to discuss unimplemented features in \cref{future-works}.
-\end{quote}
+Two application-level protocols are used, one per kind of interaction identified in Section~3.4. Plain \texttt{HTTP} backs the REST endpoints exposed by FastAPI, used for stateless, request/response interactions such as fetching the list of open lobbies; \texttt{Socket.IO} backs every realtime, bidirectional interaction between a client and a match: commands, events, and reconnection. The backend runs as an ASGI server exposing both protocols on the same process, while the frontend uses \texttt{socket.io-client} for the realtime channel and the standard \texttt{fetch} API for REST calls.
 
-\begin{itemize}
-  \item which \textbf{network protocols} to use?
-  %
-  \begin{itemize}
-    \item e.g.~UDP, TCP, HTTP, WebSockets, gRPC, XMPP, AMQP, MQTT, etc.
-  \end{itemize}
-  
-  \item how should \emph{in-transit data} be \textbf{represented}?
-  %
-  \begin{itemize}
-    \item e.g.~JSON, XML, YAML, Protocol Buffers, etc.
-  \end{itemize}
-  
-  \item how should \emph{databases} be \textbf{queried}?
-  %
-  \begin{itemize}
-    \item e.g.~SQL, NoSQL, etc.
-  \end{itemize}
-  
-  \item how should components be \emph{authenticated}?
-  %
-  \begin{itemize}
-    \item e.g.~OAuth, JWT, etc.
-  \end{itemize}
+This split is a direct consequence of the interaction patterns of Section~3.4: REST is adequate for the handful of interactions that are genuinely request/response and do not need to push anything to the client afterwards, whereas the core of the game (state synchronization, phase changes, votes) is inherently event-driven and long-lived, which HTTP alone does not model well.
 
-  \item how should components be \emph{authorized}?
-  %
-  \begin{itemize}
-    \item e.g.~RBAC, ABAC, etc.
-  \end{itemize}
-\end{itemize}
+Between backend replicas, synchronization does not reuse Socket.IO or HTTP at all: it happens over Redis Pub/Sub, i.e.\ over the Redis wire protocol on top of TCP, which is also the same connection already used for state persistence. Reusing the existing Redis connection for both state and cross-replica notification avoids introducing a separate message broker purely for this purpose, which would have added an additional infrastructural component and an additional failure mode without a corresponding benefit at the scale this project targets.
 
-\subsection{Technological details}\label{technological-details}
+\subsection{In-transit data representation}
 
-\begin{itemize}
-  \item any particular \emph{framework} / \emph{technology} being exploited goes here
-\end{itemize}
+All messages in transit are represented as \texttt{JSON}. Socket.IO event payloads are modelled in the backend as Python \texttt{dataclass} instances and explicitly converted to JSON-serializable dictionaries before being emitted; messages exchanged through Redis Pub/Sub follow the same convention, being serialized to JSON strings before publishing and parsed back on receipt. Redis itself stores game state as JSON strings together with native hash and set structures.
+
+JSON was preferred over a binary format such as Protocol Buffers or MessagePack mainly because Socket.IO is built around JSON-friendly payloads on the JavaScript side, and because the message volume and size involved (small event payloads, a handful of times per second per room at most) do not justify the added complexity of schema compilation and binary encoding/decoding on both the Python backend and the Vue frontend. Using the same representation for the wire format and for the Redis-persisted state also means a payload can, in most cases, be stored and broadcast without an intermediate transformation step.
+
+\subsection{Database querying}
+
+No relational, SQL-based database is used. Persistence is delegated entirely to Redis, and all interaction with it is NoSQL in nature: key-value and hash-based operations such as \texttt{GET}, \texttt{SETEX}, \texttt{SET NX EX}, \texttt{HGET}, \texttt{HGETALL}, \texttt{HSET}, \texttt{SADD}, and \texttt{SMEMBERS}, combined with \texttt{WATCH}/\texttt{MULTI}/\texttt{EXEC} transactions for read-modify-write sequences and a Lua script for atomically releasing the phase-advancement lock. The access pattern is room-scoped, read-heavy, and needs small atomic updates rather than relational joins, so a NoSQL key-value store maps onto it more directly than a SQL schema would.
+
+Game state is treated as the authoritative shared source and is additionally given a six-hour time-to-live, so that abandoned or forgotten rooms are reclaimed automatically instead of accumulating indefinitely in memory. The TTL delegates garbage collection to Redis instead of requiring a separate scheduled task, which is consistent with keeping backend replicas as stateless as possible, as discussed in Section~3.5.
+
+\subsection{Authentication}
+
+The current implementation does not include strong authentication. Instead, the client generates (or retrieves, if already present) a \texttt{client\_id}, stores it in \texttt{sessionStorage}, and sends it as part of the Socket.IO connection handshake; the backend treats this identifier as a session identity rather than as a cryptographic credential.
+
+This is a deliberate implementation-level simplification of the trade-off already discussed at the design level in Section~3.9. It is adequate for the controlled, ephemeral environment the game runs in, but it would need to be replaced by a real authentication mechanism before the system could be exposed in a context where impersonating another player's \texttt{client\_id} carried any real consequence.
+
+\subsection{Authorization}
+
+Authorization is implemented entirely server-side, through application rules that combine the requester's role, the current phase of the match, and per-player attributes such as liveness and connection status. At the lobby level, only the host may update lobby settings or start the match. During a match, gameplay actions are enabled only in the phase they belong to and only for the players entitled to perform them: \texttt{cast\_vote} is accepted only during the \texttt{VOTING} phase, while \texttt{wolf\_vote} and \texttt{seer\_action} are accepted only during \texttt{NIGHT} and only from players holding the corresponding role, with additional checks ensuring the player is still alive and has not already performed the action in the current phase.
+
+\subsection{Technological details}
+
+On the backend, the implementation is built on \texttt{FastAPI} for the REST surface, \texttt{python-socketio} for the realtime layer, \texttt{Pydantic} for request/response validation and serialization, \texttt{Redis} (via its async Python client) for shared state and Pub/Sub, and a \texttt{Prometheus} client library for exposing application metrics.
+
+On the frontend, the implementation uses \texttt{Vue 3} as the component framework, \texttt{Pinia} for client-side state management, \texttt{Vue Router} for navigation between lobby and game views, \texttt{socket.io-client} for the realtime connection, and \texttt{Vite} as the build tool and development server. Pinia's role here is worth making explicit given Section~3.3: it holds only the client's disposable, locally cached view of the match, rebuilt from `game\_state\_sync` whenever necessary, and is never treated by the rest of the frontend code as a source of truth in its own right.
+
+At the infrastructure level, \texttt{NGINX} acts as the reverse proxy in front of frontend and backend and as the static file server for the built frontend bundle; \texttt{Docker Compose} orchestrates local multi-container deployment; \texttt{Kubernetes} is the target for a horizontally scaled, multi-replica deployment; and \texttt{Prometheus} together with \texttt{Grafana} provides metrics collection and visualization.
 
 \section{Validation}\label{validation}
 

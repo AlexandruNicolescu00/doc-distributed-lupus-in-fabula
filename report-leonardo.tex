@@ -476,21 +476,94 @@ This testing was not automated for a specific reason: what it verifies is partly
 
 \section{Deployment}\label{deployment}
 
-\begin{itemize}
-  \item should one install your software from scratch, how to do it?
-  %
-  \begin{itemize}
-    \item provide instructions
-    \item provide expected outcomes
-  \end{itemize}
+\subsection{Installing the system from scratch}
 
-  \item what software should be installed on the machines to run your project? which versions?
-  
-  \item should one set environment variables or configuration files?
-  
-  \item if you're using containerization (e.g.~Docker), 
-  describe how you engineered your deployment scrips (e.g. \texttt{docker-compose.yml} files)
-\end{itemize}
+\subsubsection{Prerequisites}
+
+Running the project end to end requires \texttt{Docker Desktop 24.x} and \texttt{Docker Compose v2.x} in all cases; \texttt{kubectl 1.28+} and, for a local cluster, \texttt{minikube 1.32+} are additionally required for the Kubernetes deployment path. \texttt{Node.js 20} and \texttt{Python 3.12} are only needed if the frontend or backend are to be run or tested outside their containers; they are not required for a purely containerized deployment, since all application dependencies are already bundled into the corresponding images. These versions are not arbitrary but match the base images actually used in the project: the backend image is built from \texttt{python:3.12-slim}, the frontend image from \texttt{node:20-alpine}, and the infrastructure containers use \texttt{redis:7.2-alpine}, \texttt{prometheus:2.51.0}, and \texttt{grafana:10.4.0}.
+
+\subsubsection{Full local installation with Docker Compose}
+
+The recommended flow for a first installation is to clone the repository, ensure the Docker daemon is running, and then build and start the full stack, explicitly scaling the backend service to more than one replica so that the distributed behaviour described in Chapter~3 is actually exercised rather than degenerating to a single-instance deployment:
+
+\begin{verbatim}
+docker compose build
+docker compose up -d --scale backend=2
+\end{verbatim}
+
+The state of all containers can then be inspected with \texttt{docker compose ps}, and the backend's health endpoint can be checked directly:
+
+\begin{verbatim}
+docker compose ps
+curl http://localhost/health
+\end{verbatim}
+
+Once the stack is up, the system exposes: the web interface at \texttt{http://localhost}; the WebSocket endpoint at \texttt{ws://localhost/ws/<room\_id>}; the REST API under \texttt{http://localhost/api/}; Prometheus at \texttt{http://localhost:9090}; and Grafana at \texttt{http://localhost:3001}.
+
+The expected outcome of this installation is that every container reported by \texttt{docker compose ps} is either \texttt{running} or \texttt{healthy}; that the frontend is reachable from a browser at the address above; that \texttt{curl /health} returns an \texttt{ok} status; that the backend accepts WebSocket connections; and that both Prometheus and Grafana are reachable for monitoring.
+
+\subsubsection{Development-mode installation}
+
+For iterative development, the repository also supports a lighter setup in which only infrastructural services (Redis and the monitoring stack) run in containers, while the backend and frontend run directly on the host:
+
+\begin{verbatim}
+docker compose -f docker-compose-dev.yml up -d
+cd backend && pip install -r requirements.txt && uvicorn main:app --reload --port 8000
+cd frontend && npm install && npm run dev
+\end{verbatim}
+
+This mode trades the full-stack, production-like guarantees of the Compose deployment (reverse proxy, multiple backend replicas, containerized frontend) for fast reload cycles during development, and is not intended as the final deployment target described in the rest of this chapter.
+
+\subsection{Environment variables and configuration}
+
+The project makes extensive use of environment variables and configuration files internally, but this does not translate into manual work for whoever installs the system: for a standard installation, following the instructions of Section~6.1 is sufficient, and no environment variable needs to be set by hand. Every variable the application depends on is already defined, with a working default value, directly inside the deployment manifests: \texttt{docker-compose.yml} and \texttt{docker-compose-dev.yml} for the Compose path, \texttt{k8s/configmap.yml} and the other \texttt{k8s/monitoring/*.yml} manifests for the Kubernetes path. Running \texttt{docker compose up} or \texttt{kubectl apply -f k8s/} is therefore enough on its own; there is no separate \texttt{.env} file to create or edit first, there is nothing left for an installer to fill in.
+
+\subsection{Containerization strategy}
+
+\subsubsection{Docker Compose}
+
+\texttt{docker-compose.yml} defines the full local environment. It sets up separate networks for the frontend, backend, data, and monitoring tiers, consistent with the network segmentation already discussed in Section~3.2; uses NGINX as the reverse proxy in front of frontend and backend; allows the backend service to be scaled horizontally via \texttt{--scale backend=N}; attaches a persistent volume to Redis; attaches dedicated volumes to Prometheus and Grafana; includes a \texttt{redis\_exporter} service for Redis metrics; defines a health check for every service; sets \texttt{restart: unless-stopped} throughout; and exposes ports only where external access is actually needed.
+
+The repository distinguishes a development mode from the full deployment: \texttt{docker-compose-dev.yml} starts only the supporting infrastructural services for local development against a host-run backend and frontend, while \texttt{docker-compose.yml} starts the complete application stack described above.
+
+The expected outcome of a Compose deployment is that the site is reachable at \texttt{http://localhost}; that the API responds under \texttt{http://localhost/api/}; that WebSocket traffic is correctly proxied by NGINX under \texttt{/socket.io/}; that Grafana and Prometheus are operational; and that the backend can be scaled to additional replicas without any change to the application code, only to the \texttt{--scale} argument.
+
+\subsubsection{Kubernetes}
+
+For a production-like deployment, the repository includes a complete set of Kubernetes manifests under \texttt{k8s/}.
+
+The architectural choices encoded in these manifests follow directly from the availability and fault-tolerance goals: the backend starts with \texttt{replicas: 2} and is allowed to scale up to 8 replicas through a Horizontal Pod Autoscaler; the frontend is likewise replicated and stateless; Redis runs as a single replica backed by a persistent volume claim; Prometheus and Grafana each have their own dedicated persistent volume claims; rolling updates are configured with \texttt{maxUnavailable: 0} so that a deployment update never reduces the pool of available backend replicas below its current size; readiness, liveness, and startup probes govern how Kubernetes judges a pod's health at each stage of its lifecycle; a \texttt{preStop} hook on the backend drains in-flight connections before a pod is terminated; and two separate Ingress rules split traffic between the game itself and the monitoring stack, both served under the reference hostname \texttt{game.local}.
+
+Deployment onto a cluster follows a fixed manifest order, so that each component's dependencies (namespace, configuration, data tier) are already in place before the component itself is applied:
+
+\begin{verbatim}
+kubectl apply -f k8s/namespace.yml
+kubectl apply -f k8s/configmap.yml
+kubectl apply -f k8s/redis/
+kubectl apply -f k8s/backend/
+kubectl apply -f k8s/frontend/
+kubectl apply -f k8s/monitoring/redis-exporter.yml
+kubectl apply -f k8s/monitoring/prometheus.yml
+kubectl apply -f k8s/monitoring/grafana.yml
+kubectl apply -f k8s/ingress.yml
+\end{verbatim}
+
+or, equivalently, through the bundled deployment script:
+
+\begin{verbatim}
+chmod +x k8s/deploy.sh
+./k8s/deploy.sh
+\end{verbatim}
+
+The expected outcome is that all pods reach the \texttt{Running} state; that the backend and frontend Deployments report \texttt{Ready}; that the Ingress is reachable at \texttt{game.local}; that \texttt{http://game.local/health} returns \texttt{ok}; and that Grafana and Prometheus are reachable under \texttt{http://game.local/grafana} and \texttt{http://game.local/prometheus} respectively. The deployment can be verified with:
+
+\begin{verbatim}
+kubectl get pods -n game
+kubectl get services -n game
+kubectl get ingress -n game
+kubectl get hpa -n game
+curl http://game.local/health
+\end{verbatim}
 
 \section{User Guide}\label{user-guide}
 

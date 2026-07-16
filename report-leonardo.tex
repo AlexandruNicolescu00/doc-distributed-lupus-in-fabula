@@ -677,26 +677,60 @@ Figure~\ref{fig:screenshot-game-night} illustrates the night phase, during which
 
 Finally, Figure~\ref{fig:screenshot-results} shows the results screen described in Section~\ref{sec:expected-outcomes}, where the identities of all players are revealed and a summary of the completed match is presented.
 
-\section{Self-evaluation}\label{self-evaluation}
+\section{Self Evaluation}\label{self-evaluation}
+
+\subsection{Jacopo Bonifazi}
+
+\subsection{Alexandru Nicolescu}
+
+\subsection{Leonardo Vorabbi}
+
+Within the group, I was responsible for the backend of the project, focusing on the server-side logic of the application. My main responsibilities included designing and implementing the backend architecture, managing game and lobby state, implementing the Redis-based persistence layer, handling Socket.IO events and real-time server-client communication, managing phase transitions, timers, defining the game logic and validation rules for actions, voting, and role-based behavior, and implementing and maintaining the backend test suite.
+
+From my point of view, the main strengths of the product lie in its stateless-at-process-level backend architecture, which makes horizontal scaling practical, and in the hybrid communication model, combining REST for simple queries with Socket.IO/WebSocket for real-time gameplay. The system supports multiple backend replicas and keeps working correctly even when players are connected to different instances. The codebase is organized into clearly separated layers (models, state management, game logic, transport), and is backed by a test suite covering unit tests, integration tests, distributed-safety checks, and end-to-end scenarios. 
+
+The main weaknesses concern authentication, which is intentionally lightweight and based on client-side session identifiers, and could therefore be not suitable for a production environment requiring strong identity management.
+
+\section{Future Works}\label{future-works}
+
+The current implementation already provides a complete distributed real-time game
+platform, but several directions remain open to strengthen robustness, simplify
+maintenance, and extend gameplay.
 
 \begin{itemize}
-  \item An individual section is required for each member of the group
-  \item Each member must self-evaluate their work, listing the strengths and weaknesses of the product
-  \item Each member must describe their role within the group as objectively as possible.
+    \item \textbf{Strong authentication and persistent identities.} Client identity is
+    currently a lightweight value stored in \texttt{sessionStorage} and passed during
+    the Socket.IO handshake. A production-grade solution would introduce a
+    \texttt{JWT}/OAuth login flow, require the signed token on both REST and
+    Socket.IO connections, and persist user profiles (username, avatar, match
+    history) in a database, making host privileges and player identity independent
+    of client-provided values.
+
+    \item \textbf{High availability for Redis.} Redis is deployed as a single
+    primary instance, which is a single point of failure. \texttt{Redis Sentinel} or
+    \texttt{Redis Cluster}, replication, automated failover, and tuned
+    persistence/eviction policies would make the platform more robust in
+    production-like scenarios.
+
+    \item \textbf{Persistence of chat and match history.} Chat messages currently
+    live only in the frontend store and the real-time channel, with no long-term
+    history. Storing messages in a database or a per-room Redis list, adding
+    pagination, and persisting match summaries (phases, eliminations, winners)
+    would enable a history/replay page and improve debuggability.
+
+    \item \textbf{Richer matchmaking and lobby management.} The lobby workflow could
+    be extended with public/private rooms and filters, automatic room assignment,
+    invite links or QR codes, and room templates for different rule sets.
+
+    \item \textbf{More roles and configurable rule variants.} The fixed core role
+    set and phase structure could be extended with roles such as Hunter, Doctor, or
+    Cupid, with role composition and game mode externalized into a configuration
+    file selectable by the host before the match starts.
+
+    \item \textbf{Security hardening.} Server-issued identities, signed session
+    cookies/JWTs, stricter CORS and WebSocket origin checks, rate limiting on
+    sensitive actions, and protected administrative/monitoring endpoints would make
+    the system safer outside a trusted classroom or demo environment.
 \end{itemize}
-
-It should be noted that each student is only responsible for their own section.
-
-\section{Future works}\label{future-works}
-
-Discuss possible future works, improvements, extensions, optimizations, etc.
-
-Also discuss here any unimplemented feature, and how you would have implemented it.
-
-\bibliographystyle{plain}
-\bibliography{references}
-
-% inserito per sopprimere errore "No citations found". Rimuovere alla fine
-\nocite{*} 
 
 \end{document}

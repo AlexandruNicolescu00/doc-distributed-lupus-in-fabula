@@ -41,7 +41,7 @@
 
 \section*{Disclaimer}
 
-During the preparation of this work, the authors used LLMs to refine syntax and correct linguistic errors.
+During the preparation of this work, the authors used LLM-based tools (Claude) to refine syntax, correct linguistic errors, core review and the refinement of infrastructure configuration files.
 After using this tool, the authors reviewed and edited the content as needed and take full responsibility for the content of the final report/artifact.
 
 \section{Concept}\label{Concept}
@@ -132,7 +132,7 @@ side, the browser retains a minimal amount of session data in local storage,
 purely to support reconnection and continuity across page reloads or brief
 disconnects.
 
-\begin{figure}[H]
+\begin{figure}
       \centering
       \includegraphics[width=0.55\textwidth]{figures/system_architecture_overview.png}
       \caption{High-level architecture: clients connect through a reverse proxy to
@@ -317,7 +317,7 @@ identifier and an associated acceptance criterion (AC) used during validation.
                   connection is refused with an explanatory message.}
 \end{description}
 
-\begin{figure}[H]
+\begin{figure}
       \centering
       \includegraphics[width=0.9\textwidth]{figures/game_state_machine.png}
       \caption{State machine of the match phases. Transitions are driven
@@ -580,7 +580,7 @@ The deployed system comprises the following components:
             itself.
 \end{description}
 
-\begin{figure}[H]
+\begin{figure}
       \centering
       \includegraphics[width=0.85\textwidth]{figures/component_diagram.png}
       \caption{Component diagram: logical components and their dependencies ---
@@ -605,7 +605,7 @@ segmentation is reproduced through separate Services and namespaced routing, wit
 backend and Redis exposed only as internal \texttt{ClusterIP} services and
 external traffic entering exclusively through the NGINX Ingress.
 
-\begin{table}[H]
+\begin{table}
       \centering
       \caption{Network membership of each component in the Docker Compose topology.
             Two components can talk at the network layer \emph{iff} they share a bridge
@@ -669,7 +669,7 @@ The domain model is small and centred on the room:
             never stored.
 \end{description}
 
-\begin{figure}[H]
+\begin{figure}
       \centering
       \includegraphics[width=0.75\textwidth]{figures/class_diagram.png}
       \caption{Domain class diagram: the room owns players, game state, ballots, and
@@ -742,7 +742,7 @@ casting a vote does not update the local tally directly; the tally updates only
 when the server broadcasts the \texttt{vote\_update}. \Cref{tab:events}
 summarises the event contract.
 
-\begin{table}[H]
+\begin{table}
       \centering
       \small
       \begin{tabular}{@{}p{2.0cm}p{6.0cm}p{5.2cm}@{}}
@@ -775,7 +775,7 @@ replica $B$ receives it from the bus, sees a foreign sender id, and relays it to
 its local members (e.g.\ client $C_2$); (5) both $C_1$ and $C_2$ render the same
 vote within milliseconds (\cref{fig:sequence}).
 
-\begin{figure}[H]
+\begin{figure}
       \centering
       \includegraphics[width=\textwidth]{figures/sequence_diagram.png}
       \caption{Sequence diagram of a cross-replica game action. The originating
@@ -822,7 +822,7 @@ the lobby. Transitions are triggered by \emph{either} the phase deadline expirin
 \emph{or} the phase completing early (all living players voted; all wolves and the
 seer acted) \emph{or} a decisive disconnection.
 
-\begin{figure}[H]
+\begin{figure}
       \centering
       \includegraphics[width=0.85\textwidth]{figures/state_diagram.png}
       \caption{State diagram of a match: the phases and the transitions that resolve
@@ -1033,7 +1033,7 @@ Failure detection is timeout-based at every seam:
             monitoring stack is entirely out of the game's fault path.
 \end{description}
 
-\begin{table}[H]
+\begin{table}
       \centering
       \footnotesize
       \setlength{\tabcolsep}{6pt}
@@ -1356,7 +1356,7 @@ a \texttt{redis\_exporter}, evaluates recording/alert rules (backend down, Redis
 down, error rates), and \textbf{Grafana} ships with a provisioned dashboard --- so
 observability (NFR7) works out of the box in both deployments.
 
-\begin{table}[H]
+\begin{table}
       \centering
       \footnotesize
       \setlength{\tabcolsep}{6pt}
@@ -1502,7 +1502,7 @@ python tests/diag_loss.py ws://game.local/ws
 python tests/load_test.py --url http://game.local --clients 300 --procs 4
 \end{verbatim}
 
-\begin{table}[H]
+\begin{table}
       \centering
       \small
       \begin{tabular}{p{2.1cm} p{3.4cm} p{4.2cm} p{2.5cm}}
@@ -1556,7 +1556,7 @@ the repository; complete step-by-step instructions live in the repository
 and configuration mechanism (\cref{technological-details}) and differ only in what
 is containerised and in the target environment.
 
-\begin{table}[H]
+\begin{table}
       \centering
       \footnotesize
       \setlength{\tabcolsep}{6pt}
@@ -1705,7 +1705,7 @@ kubectl get hpa -n game
 curl http://game.local/health
 \end{verbatim}
 
-\begin{table}[H]
+\begin{table}
       \centering
       \footnotesize
       \setlength{\tabcolsep}{6pt}
@@ -1844,7 +1844,7 @@ can return to the lobby or home.
 
 \subsection{Visual walkthrough}\label{visual-walkthrough}
 
-\begin{figure}[H]
+\begin{figure}
       \centering
       \includegraphics[width=0.8\textwidth]{figures/screenshot_home.png}
       \caption{Home page: the two main options, \emph{Crea Partita} and
@@ -1852,7 +1852,7 @@ can return to the lobby or home.
       \label{fig:screenshot-home}
 \end{figure}
 
-\begin{figure}[H]
+\begin{figure}
       \centering
       \includegraphics[width=0.8\textwidth]{figures/screenshot_lobby.png}
       \caption{Lobby screen: room code, connected players and their \emph{Ready}
@@ -1860,14 +1860,14 @@ can return to the lobby or home.
       \label{fig:screenshot-lobby}
 \end{figure}
 
-\begin{figure}[H]
+\begin{figure}
       \centering
       \includegraphics[width=0.8\textwidth]{figures/screenshot_game_day.png}
       \caption{Game screen during the day phase, while voting is in progress.}
       \label{fig:screenshot-game-day}
 \end{figure}
 
-\begin{figure}[H]
+\begin{figure}
       \centering
       \includegraphics[width=0.8\textwidth]{figures/screenshot_game_night.png}
       \caption{Game screen during the night phase, showing the actions available only
@@ -1875,7 +1875,7 @@ can return to the lobby or home.
       \label{fig:screenshot-game-night}
 \end{figure}
 
-\begin{figure}[H]
+\begin{figure}
       \centering
       \includegraphics[width=0.8\textwidth]{figures/screenshot_results.png}
       \caption{Final results screen announcing the winning team and revealing all

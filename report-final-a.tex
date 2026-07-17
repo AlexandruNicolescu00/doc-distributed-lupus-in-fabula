@@ -742,7 +742,7 @@ casting a vote does not update the local tally directly; the tally updates only
 when the server broadcasts the \texttt{vote\_update}. \Cref{tab:events}
 summarises the event contract.
 
-\begin{table}
+\begin{table}\texttt{chat\_message}       
       \centering
       \small
       \begin{tabular}{@{}p{2.0cm}p{6.0cm}p{5.2cm}@{}}
@@ -1490,7 +1490,7 @@ expensive runs:
 \begin{verbatim}
 # Smoke checks
 curl http://game.local/health
-wscat -c "ws://game.local/ws/test_room?client_id=test123"
+wscat -c "ws://game.local/socket.io/?client_id=test123&room_id=test_room"
 
 # Multi-instance propagation (replication transparency)
 python tests/test_multi_instance.py --url http://game.local
@@ -1655,10 +1655,10 @@ definition (no fixed container name or published port, so \texttt{--scale
       backend=$N$} just works, NGINX resolving the service name at request time); and
 resource limits mirroring the Kubernetes ones. Expected outcome: every service
 \emph{healthy}; the game at \texttt{http://localhost}, the WebSocket endpoint at
-\texttt{ws://localhost/ws/<room\_id>}, the REST API under
+\texttt{ws://localhost/socket.io/} (room and client identity travel in the
+Socket.IO handshake payload, not the URL), the REST API under
 \texttt{http://localhost/api/}, Prometheus at \texttt{:9090}, Grafana at
 \texttt{:3001}; \texttt{curl /health} returns each replica's id in round-robin.
-
 \subsection{Profile 3 --- Kubernetes (minikube)}\label{profile-k8s}
 
 Images are built into minikube's Docker daemon, then either the

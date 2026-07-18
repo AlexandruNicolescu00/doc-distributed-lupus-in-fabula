@@ -291,8 +291,10 @@ identifier and an associated acceptance criterion (AC) used during validation.
             over restricted-visibility channels (a global channel during the day, a
             wolves-only channel at night, and a dead-players channel); system
             announcements (e.g.\ a player fleeing mid-game) appear in the same feed.
-            \emph{AC: a message on a restricted channel is rendered only by the clients
-                  entitled to see it, and a message sent by a player on replica $A$ reaches
+            \emph{AC: a message on a restricted channel is rendered only by the clients 
+            entitled to see it (living players only see channels their role permits; 
+            eliminated players, having no game secrets left to protect, may observe all 
+            channels), and a message sent by a player on replica $A$ reaches
                   entitled players on replica $B$.}
 
       \item[FR11 --- Reconnection.] A player who loses the connection mid-game can
@@ -1770,6 +1772,14 @@ Point a browser at the entry URL: \texttt{http://localhost} with Compose,
 \texttt{http://game.local} on Kubernetes. The home page offers two paths:
 \emph{Crea Partita} (create a new game) and \emph{Entra in Lobby} (join an
 existing lobby).
+
+\paragraph{Consulting the rules.}
+A persistent \emph{Regole del gioco} button in the top corner of the home
+page opens an in-app panel summarising the game: its objective, the roles
+(wolf, seer, villager), the day/night phase cycle, and the special rules
+(disconnection grace period, ties producing no elimination, wolves seeing
+one another). This lets a new player review the rules without leaving the
+application, supporting the usability goal (NFR9).
 
 \paragraph{Creating a new lobby.}
 Selecting \emph{Crea Partita} and entering a nickname creates a new room in which
